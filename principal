@@ -1,0 +1,183 @@
+#include "mbed.h"
+#include "TM1638.h"
+
+#define DIO D2
+#define CLK D3
+#define STB D4
+
+// Inicialización del TM1638 y del buzzer
+TM1638 tm(DIO, CLK, STB);
+PwmOut buzzer(D5);
+
+// Función para emitir un beep
+void beep(int frecuencia_hz, int tiempo_ms) {
+    buzzer.period(1.0 / frecuencia_hz);
+    buzzer = 0.5;
+    thread_sleep_for(tiempo_ms);
+    buzzer = 0.0;
+}
+
+void contador() {
+    tm.clearDisplay();
+    int counter = 0;
+    bool ascending = true;
+
+    while (true) {
+        tm.setDisplayToDecNumber(counter); // Muestra contador en display
+        uint8_t botones = tm.readButtons();
+
+        if (botones & 0x01) { // Botón 1 → cambiar dirección
+            ascending = !ascending;
+            beep(2000, 100);   // beep al cambiar dirección
+            ThisThread::sleep_for(300ms);
+        }
+        if (botones & 0x40) { // Botón 7 → salir al menú
+            tm.clearDisplay();
+            return;
+        }
+
+        if (ascending) {
+            counter++;
+            if (counter > 99999999) counter = 0;
+        } else {
+            counter--;
+            if (counter < 0) counter = 99999999;
+        }
+        ThisThread::sleep_for(300ms);
+    }
+}
+
+void juego() {
+    srand(time(NULL));
+
+    int intentos = 6;
+    int aciertos = 0;
+    int errores = 0;
+    int tiempoTotal = 0;
+
+    for (int i = 0; i < intentos; i++) {
+        int ledIndex = rand() % 8;
+        int botonCorrecto = 1 << ledIndex;
+
+        tm.clearDisplay();
+        for (int l = 0; l < 8; l++) {
+            tm.setLED(l, (l == ledIndex));
+        }
+        tm.setDisplayToDecNumber(ledIndex + 1); // Muestra el número del LED
+
+        Timer timer;
+        timer.start(); // Inicia temporizador
+        bool presionado = false;
+        uint8_t botonLeido = 0;
+
+        while (!presionado) {
+            uint8_t botones = tm.readButtons();
+            if (botones & 0x40) { // Botón 7 → salir
+                tm.clearDisplay();
+                return;
+            }
+            if (botones != 0) {
+                botonLeido = botones;
+                presionado = true;
+            }
+        }
+
+        timer.stop();
+        int tiempoReaccion = chrono::duration_cast<chrono::milliseconds>(timer.elapsed_time()).count();
+
+        if (botonLeido == botonCorrecto) {
+            aciertos++;
+            tiempoTotal += tiempoReaccion;
+            tm.setDisplayToDecNumber(tiempoReaccion);
+            beep(2500, 150);  // beep de acierto
+        } else {
+            errores++;
+            tm.setDisplayToDecNumber(9999);
+            beep(800, 300);   // beep de error
+        }
+
+        thread_sleep_for(2000);
+        tm.clearDisplay();
+        for (int l = 0; l < 8; l++) tm.setLED(l, false);
+    }
+    // Muestra resultados finales
+    int promedio = (aciertos > 0) ? tiempoTotal / aciertos : 0;
+    tm.setDisplayToDecNumber(aciertos); thread_sleep_for(2000);
+    tm.setDisplayToDecNumber(errores); thread_sleep_for(2000);
+    tm.setDisplayToDecNumber(promedio); thread_sleep_for(4000);
+
+    tm.clearDisplay();
+    for (int l = 0; l < 8; l++) tm.setLED(l, false);
+}
+
+void vumetro() {
+    tm.clearDisplay();
+    int nivel = 0;
+
+    while (true) {
+        uint8_t botones = tm.readButtons();
+
+        if (botones & 0x01) { // Botón 1 → subir nivel
+            if (nivel < 8) {
+                nivel++;
+                for (int i = 0; i < nivel; i++) {
+                    tm.setLED(i, 1);
+                }
+                tm.setDisplayToDecNumber(nivel);
+                beep(2500, 40);
+            } else {
+                // Reinicio con efecto
+                for (int i = 7; i >= 0; i--) {
+                    tm.setLED(i, 0);
+                    beep(1000, 50);
+                    thread_sleep_for(60);
+                }
+                nivel = 0;
+                tm.clearDisplay();
+            }
+            thread_sleep_for(200);
+        }
+
+        if (botones & 0x02) { // Botón 2 → bajar nivel
+            if (nivel > 0) {
+                tm.setLED(nivel - 1, 0);
+                nivel--;
+                tm.setDisplayToDecNumber(nivel);
+                beep(1000, 40);
+            }
+            thread_sleep_for(200);
+        }
+
+        if (botones & 0x40) { // Botón 7 → salir al menú
+            tm.clearDisplay();
+            return;
+        }
+    }
+}
+
+int main() {
+    tm.init(); // Inicializa el TM1638
+    tm.setBrightness(3);
+
+    while (true) {
+        printf("\n MENU PRINCIPAL \n");
+        printf("Boton 1 - Contador\n");
+        printf("Boton 2 - Juego\n");
+        printf("Boton 3 - Vumetro\n");
+        printf("Boton 7 - Reiniciar / Volver al Menu\n");
+        printf("\n");
+
+        bool seleccion = false;
+        while (!seleccion) {
+            uint8_t botones = tm.readButtons();
+            if (botones & 0x01) { contador(); seleccion = true; }
+            if (botones & 0x02) { juego(); seleccion = true; }
+            if (botones & 0x04) { vumetro(); seleccion = true; }
+            if (botones & 0x40) { // Botón 7 → reinicio
+                tm.clearDisplay();
+                seleccion = true;
+            }
+            ThisThread::sleep_for(100ms);
+        }
+    }
+}
